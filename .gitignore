@@ -1,0 +1,25 @@
+# Nuxt
+.nuxt
+.output
+.data
+.cache
+dist
+
+# Node
+node_modules
+*.log
+.npm
+.eslintcache
+
+# Editor
+.vscode
+.idea
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# OS
+.DS_Store
+Thumbs.db
