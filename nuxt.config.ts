@@ -8,6 +8,7 @@ export default defineNuxtConfig({
   css: ["~/assets/css/main.css"],
 
   app: {
+    baseURL: process.env.NUXT_APP_BASE_URL || '/',
     head: {
       htmlAttrs: { lang: "sk" },
       title: "Slovensko v grafoch — demografia a ekonomika",
