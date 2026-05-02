@@ -70,3 +70,28 @@ export function loadDebt() {
     sector: "S13",
   });
 }
+
+/**
+ * Quarterly real GDP YoY growth — reveals turning points and recessions
+ * earlier than annual figures. Negative values = contraction.
+ * Dataset: namq_10_gdp, B1GQ, CLV_PCH_SM (chain-linked volumes, % change vs same quarter previous year),
+ * SCA = seasonally + calendar adjusted.
+ */
+export function loadGdpQuarterly() {
+  return makeSeries("namq_10_gdp", {
+    na_item: "B1GQ",
+    unit: "CLV_PCH_SM",
+    s_adj: "SCA",
+  });
+}
+
+/**
+ * Monthly HICP inflation YoY — most timely consumer-price signal.
+ * Dataset: prc_hicp_manr, CP00 (all items), RCH_A (annual rate of change %).
+ */
+export function loadInflationMonthly() {
+  return makeSeries("prc_hicp_manr", {
+    coicop: "CP00",
+    unit: "RCH_A",
+  });
+}

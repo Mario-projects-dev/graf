@@ -2,8 +2,10 @@
 import { computed } from "vue";
 import {
   loadGdp,
+  loadGdpQuarterly,
   loadUnemployment,
   loadInflation,
+  loadInflationMonthly,
   loadDebt,
   type EconSeries,
 } from "~/composables/useEkonomika";
@@ -31,26 +33,32 @@ useHead({
 
 interface Bundle {
   gdp: EconSeries | null;
+  gdpQ: EconSeries | null;
   une: EconSeries | null;
   inf: EconSeries | null;
+  infM: EconSeries | null;
   debt: EconSeries | null;
   fetchedAt: number;
 }
 const { data, pending } = useStaticData<Bundle>(
   "ekonomika.overview",
   async () => {
-    const [gdp, une, inf, debt] = await Promise.all([
+    const [gdp, gdpQ, une, inf, infM, debt] = await Promise.all([
       safeAsync(loadGdp, null as EconSeries | null, "gdp"),
+      safeAsync(loadGdpQuarterly, null as EconSeries | null, "gdpQuarterly"),
       safeAsync(loadUnemployment, null as EconSeries | null, "unemployment"),
       safeAsync(loadInflation, null as EconSeries | null, "inflation"),
+      safeAsync(loadInflationMonthly, null as EconSeries | null, "inflationMonthly"),
       safeAsync(loadDebt, null as EconSeries | null, "debt"),
     ]);
-    return { gdp, une, inf, debt, fetchedAt: Date.now() };
+    return { gdp, gdpQ, une, inf, infM, debt, fetchedAt: Date.now() };
   },
   () => ({
     gdp: null,
+    gdpQ: null,
     une: null,
     inf: null,
+    infM: null,
     debt: null,
     fetchedAt: 0,
   })
@@ -66,8 +74,10 @@ function slot(v: EconSeries | null | undefined, dataset: string, errLabel: strin
 }
 
 const gdp = computed(() => slot(data.value?.gdp, "nama_10_pc", "HDP"));
+const gdpQ = computed(() => slot(data.value?.gdpQ, "namq_10_gdp", "Rast HDP (kvartálne)"));
 const une = computed(() => slot(data.value?.une, "une_rt_a", "Nezamestnanosť"));
-const inf = computed(() => slot(data.value?.inf, "prc_hicp_aind", "Inflácia"));
+const inf = computed(() => slot(data.value?.inf, "prc_hicp_aind", "Inflácia ročne"));
+const infM = computed(() => slot(data.value?.infM, "prc_hicp_manr", "Inflácia mesačne"));
 const debt = computed(() => slot(data.value?.debt, "gov_10dd_edpt1", "Verejný dlh"));
 
 function fmtKpi(s: Slot, suffix: "€" | "%"): { value: string; meta: string } {
@@ -83,25 +93,57 @@ function fmtKpi(s: Slot, suffix: "€" | "%"): { value: string; meta: string } {
 
 const gdpKpi = computed(() => fmtKpi(gdp.value, "€"));
 const uneKpi = computed(() => fmtKpi(une.value, "%"));
-const infKpi = computed(() => fmtKpi(inf.value, "%"));
 const debtKpi = computed(() => fmtKpi(debt.value, "%"));
+
+function fmtPctSigned(s: Slot, freq: string): { value: string; meta: string } {
+  if (s.state === "load") return { value: "–", meta: "načítavam…" };
+  if (!s.data?.last) return { value: "—", meta: "nedostupné" };
+  const last = s.data.last;
+  const sign = last.v > 0 ? "+" : "";
+  return {
+    value: sign + last.v.toFixed(1) + " %",
+    meta: last.year + " · " + freq,
+  };
+}
+const gdpQKpi = computed(() => fmtPctSigned(gdpQ.value, "Eurostat namq_10_gdp"));
+const infMKpi = computed(() => fmtPctSigned(infM.value, "Eurostat prc_hicp_manr"));
+
+function trendOf(v: number | null, threshold = 0.1): "up" | "down" | "flat" | undefined {
+  if (v == null) return undefined;
+  if (v > threshold) return "up";
+  if (v < -threshold) return "down";
+  return "flat";
+}
+const gdpQTrend = computed(() => trendOf(gdpQ.value.data?.last?.v ?? null, 0.1));
+const infMTrend = computed(() => {
+  const v = infM.value.data?.last?.v ?? null;
+  // For inflation we treat above-target (> 2 %) as "up" (warning), under as "down" (good).
+  if (v == null) return undefined;
+  if (v > 2.5) return "up";
+  if (v < 1.5) return "down";
+  return "flat";
+});
 
 const overall = computed(() => {
   if (pending.value) return { text: "⏳ Sťahujem živé ekonomické dáta z Eurostatu…", cls: "" };
-  const ok = [
+  const sources = [
     data.value?.gdp,
+    data.value?.gdpQ,
     data.value?.une,
     data.value?.inf,
+    data.value?.infM,
     data.value?.debt,
-  ].filter(Boolean).length;
+  ];
+  const ok = sources.filter(Boolean).length;
+  const total = sources.length;
   const stamp = data.value?.fetchedAt
     ? new Date(data.value.fetchedAt).toLocaleString("sk-SK")
     : "";
-  if (ok === 4)
-    return { text: "✓ Aktualizované zo živých zdrojov Eurostatu (4 datasety) · " + stamp, cls: "status-line--ok" };
+  if (ok === total)
+    return { text: "✓ Aktualizované zo živých zdrojov Eurostatu (" + total + " datasetov) · " + stamp, cls: "status-line--ok" };
   if (ok === 0)
     return { text: "⚠ Eurostat nedostupný — žiadne dáta sa nepodarilo načítať.", cls: "status-line--err" };
-  return { text: "⚠ " + (4 - ok) + "/4 zdrojov zlyhalo · " + stamp, cls: "status-line--warn" };
+  return { text: "⚠ " + (total - ok) + "/" + total + " zdrojov zlyhalo · " + stamp, cls: "status-line--warn" };
 });
 
 function emptySeries(): EconSeries {
@@ -112,14 +154,79 @@ function emptySeries(): EconSeries {
 <template>
   <p :class="['status-line', overall.cls]">{{ overall.text }}</p>
 
-  <section class="kpi-strip" aria-label="Najnovšie hodnoty">
+  <section class="kpi-strip kpi-strip--five" aria-label="Najnovšie hodnoty">
     <KpiCard label="HDP / obyvateľa" :value="gdpKpi.value" :meta="gdpKpi.meta" accent="#60a5fa" />
+    <KpiCard
+      label="Rast HDP r/r (kvartálne)"
+      :value="gdpQKpi.value"
+      :meta="gdpQKpi.meta"
+      accent="#22d3ee"
+      :trend="gdpQTrend"
+    />
     <KpiCard label="Nezamestnanosť" :value="uneKpi.value" :meta="uneKpi.meta" accent="#fb7185" />
-    <KpiCard label="Inflácia (HICP)" :value="infKpi.value" :meta="infKpi.meta" accent="#fbbf24" />
+    <KpiCard
+      label="Inflácia HICP (mesačne)"
+      :value="infMKpi.value"
+      :meta="infMKpi.meta"
+      accent="#fbbf24"
+      :trend="infMTrend"
+    />
     <KpiCard label="Verejný dlh" :value="debtKpi.value" :meta="debtKpi.meta" accent="#a78bfa" />
   </section>
 
   <div class="charts-grid">
+    <article class="chart-panel chart-panel--full">
+      <h2>Rast HDP medziročne (kvartálne)</h2>
+      <p class="sub">
+        Reálny HDP, % zmena oproti rovnakému kvartálu predchádzajúceho roka — najcitlivejší indikátor obratu cyklu. Záporné hodnoty znamenajú medziročný pokles produkcie. Zdroj:
+        <a href="https://ec.europa.eu/eurostat/databrowser/view/namq_10_gdp" target="_blank" rel="noopener">Eurostat namq_10_gdp</a> (B1GQ, CLV_PCH_SM, sezónne aj kalendárne očistené).
+      </p>
+      <SrcBadge :state="gdpQ.state === 'ok' ? 'eurostat' : gdpQ.state === 'err' ? 'err' : 'load'" :label="gdpQ.label" />
+      <ChartsEconLineChart
+        :times="(gdpQ.data ?? emptySeries()).times"
+        :sk="(gdpQ.data ?? emptySeries()).sk"
+        :eu="(gdpQ.data ?? emptySeries()).eu"
+        y-label="Medziročná zmena (%)"
+        :y-percent="true"
+        x-label="Štvrťrok"
+        color1="#22d3ee"
+        :reference-line="0"
+        reference-label="0 % — recesná hranica"
+        reference-color="#fb7185"
+        :rotate-x="true"
+        aria-label="Kvartálny rast HDP SR vs EÚ27"
+      />
+      <p class="note">
+        Trvalý pokles pod nulu počas dvoch po sebe nasledujúcich kvartálov je technická definícia recesie. Hodnoty po vrchole 2022 sa stupňovite oslabili — porovnanie s EÚ27 ukazuje, či je problém slovenský alebo európsky.
+      </p>
+    </article>
+
+    <article class="chart-panel chart-panel--full">
+      <h2>Inflácia HICP medziročne (mesačne)</h2>
+      <p class="sub">
+        Harmonizovaný index spotrebiteľských cien, % zmena oproti rovnakému mesiacu pred rokom. Aktualizované každý mesiac, čerstvejšie ako ročný priemer. Zdroj:
+        <a href="https://ec.europa.eu/eurostat/databrowser/view/prc_hicp_manr" target="_blank" rel="noopener">Eurostat prc_hicp_manr</a> (CP00, RCH_A).
+      </p>
+      <SrcBadge :state="infM.state === 'ok' ? 'eurostat' : infM.state === 'err' ? 'err' : 'load'" :label="infM.label" />
+      <ChartsEconLineChart
+        :times="(infM.data ?? emptySeries()).times"
+        :sk="(infM.data ?? emptySeries()).sk"
+        :eu="(infM.data ?? emptySeries()).eu"
+        y-label="Medziročná zmena (%)"
+        :y-percent="true"
+        x-label="Mesiac"
+        color1="#fbbf24"
+        :reference-line="2"
+        reference-label="2 % — cieľ ECB"
+        reference-color="#34d399"
+        :rotate-x="true"
+        aria-label="Mesačná inflácia HICP SR vs EÚ27"
+      />
+      <p class="note">
+        Cieľ ECB je 2 % v strednodobom horizonte. Vrchol 2022–2023 odráža energetickú krízu; postpandemický návrat na cieľ je v EÚ27 rýchlejší než na Slovensku.
+      </p>
+    </article>
+
     <article class="chart-panel">
       <h2>HDP na obyvateľa (EUR)</h2>
       <p class="sub">
