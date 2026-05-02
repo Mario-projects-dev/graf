@@ -95,3 +95,17 @@ export function loadInflationMonthly() {
     unit: "RCH_A",
   });
 }
+
+/**
+ * Monthly unemployment rate — fresher labour-market signal than the annual une_rt_a.
+ * Dataset: une_rt_m, total population 15-74 implied by age=TOTAL+sex=T,
+ * SA = seasonally adjusted, PC_ACT = % of labour force.
+ */
+export function loadUnemploymentMonthly() {
+  return makeSeries("une_rt_m", {
+    age: "TOTAL",
+    sex: "T",
+    unit: "PC_ACT",
+    s_adj: "SA",
+  });
+}

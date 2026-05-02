@@ -4,6 +4,7 @@ import {
   loadGdp,
   loadGdpQuarterly,
   loadUnemployment,
+  loadUnemploymentMonthly,
   loadInflation,
   loadInflationMonthly,
   loadDebt,
@@ -35,6 +36,7 @@ interface Bundle {
   gdp: EconSeries | null;
   gdpQ: EconSeries | null;
   une: EconSeries | null;
+  uneM: EconSeries | null;
   inf: EconSeries | null;
   infM: EconSeries | null;
   debt: EconSeries | null;
@@ -43,20 +45,22 @@ interface Bundle {
 const { data, pending } = useStaticData<Bundle>(
   "ekonomika.overview",
   async () => {
-    const [gdp, gdpQ, une, inf, infM, debt] = await Promise.all([
+    const [gdp, gdpQ, une, uneM, inf, infM, debt] = await Promise.all([
       safeAsync(loadGdp, null as EconSeries | null, "gdp"),
       safeAsync(loadGdpQuarterly, null as EconSeries | null, "gdpQuarterly"),
       safeAsync(loadUnemployment, null as EconSeries | null, "unemployment"),
+      safeAsync(loadUnemploymentMonthly, null as EconSeries | null, "unemploymentMonthly"),
       safeAsync(loadInflation, null as EconSeries | null, "inflation"),
       safeAsync(loadInflationMonthly, null as EconSeries | null, "inflationMonthly"),
       safeAsync(loadDebt, null as EconSeries | null, "debt"),
     ]);
-    return { gdp, gdpQ, une, inf, infM, debt, fetchedAt: Date.now() };
+    return { gdp, gdpQ, une, uneM, inf, infM, debt, fetchedAt: Date.now() };
   },
   () => ({
     gdp: null,
     gdpQ: null,
     une: null,
+    uneM: null,
     inf: null,
     infM: null,
     debt: null,
@@ -75,7 +79,8 @@ function slot(v: EconSeries | null | undefined, dataset: string, errLabel: strin
 
 const gdp = computed(() => slot(data.value?.gdp, "nama_10_pc", "HDP"));
 const gdpQ = computed(() => slot(data.value?.gdpQ, "namq_10_gdp", "Rast HDP (kvartálne)"));
-const une = computed(() => slot(data.value?.une, "une_rt_a", "Nezamestnanosť"));
+const une = computed(() => slot(data.value?.une, "une_rt_a", "Nezamestnanosť ročne"));
+const uneM = computed(() => slot(data.value?.uneM, "une_rt_m", "Nezamestnanosť mesačne"));
 const inf = computed(() => slot(data.value?.inf, "prc_hicp_aind", "Inflácia ročne"));
 const infM = computed(() => slot(data.value?.infM, "prc_hicp_manr", "Inflácia mesačne"));
 const debt = computed(() => slot(data.value?.debt, "gov_10dd_edpt1", "Verejný dlh"));
@@ -92,7 +97,6 @@ function fmtKpi(s: Slot, suffix: "€" | "%"): { value: string; meta: string } {
 }
 
 const gdpKpi = computed(() => fmtKpi(gdp.value, "€"));
-const uneKpi = computed(() => fmtKpi(une.value, "%"));
 const debtKpi = computed(() => fmtKpi(debt.value, "%"));
 
 function fmtPctSigned(s: Slot, freq: string): { value: string; meta: string } {
@@ -105,7 +109,17 @@ function fmtPctSigned(s: Slot, freq: string): { value: string; meta: string } {
     meta: last.year + " · " + freq,
   };
 }
+function fmtPct(s: Slot, freq: string): { value: string; meta: string } {
+  if (s.state === "load") return { value: "–", meta: "načítavam…" };
+  if (!s.data?.last) return { value: "—", meta: "nedostupné" };
+  const last = s.data.last;
+  return {
+    value: last.v.toFixed(1) + " %",
+    meta: last.year + " · " + freq,
+  };
+}
 const gdpQKpi = computed(() => fmtPctSigned(gdpQ.value, "Eurostat namq_10_gdp"));
+const uneMKpi = computed(() => fmtPct(uneM.value, "Eurostat une_rt_m, sez. očistené"));
 const infMKpi = computed(() => fmtPctSigned(infM.value, "Eurostat prc_hicp_manr"));
 
 function trendOf(v: number | null, threshold = 0.1): "up" | "down" | "flat" | undefined {
@@ -123,6 +137,18 @@ const infMTrend = computed(() => {
   if (v < 1.5) return "down";
   return "flat";
 });
+const uneMTrend = computed(() => {
+  // Compare last value with the value 12 months earlier — rising = up (bad).
+  const series = uneM.value.data;
+  if (!series?.sk || series.sk.length < 13) return undefined;
+  const last = series.sk[series.sk.length - 1];
+  const yearAgo = series.sk[series.sk.length - 13];
+  if (last == null || yearAgo == null) return undefined;
+  const delta = last - yearAgo;
+  if (delta > 0.2) return "up";
+  if (delta < -0.2) return "down";
+  return "flat";
+});
 
 const overall = computed(() => {
   if (pending.value) return { text: "⏳ Sťahujem živé ekonomické dáta z Eurostatu…", cls: "" };
@@ -130,6 +156,7 @@ const overall = computed(() => {
     data.value?.gdp,
     data.value?.gdpQ,
     data.value?.une,
+    data.value?.uneM,
     data.value?.inf,
     data.value?.infM,
     data.value?.debt,
@@ -163,7 +190,13 @@ function emptySeries(): EconSeries {
       accent="#22d3ee"
       :trend="gdpQTrend"
     />
-    <KpiCard label="Nezamestnanosť" :value="uneKpi.value" :meta="uneKpi.meta" accent="#fb7185" />
+    <KpiCard
+      label="Nezamestnanosť (mesačne)"
+      :value="uneMKpi.value"
+      :meta="uneMKpi.meta"
+      accent="#fb7185"
+      :trend="uneMTrend"
+    />
     <KpiCard
       label="Inflácia HICP (mesačne)"
       :value="infMKpi.value"
@@ -224,6 +257,29 @@ function emptySeries(): EconSeries {
       />
       <p class="note">
         Cieľ ECB je 2 % v strednodobom horizonte. Vrchol 2022–2023 odráža energetickú krízu; postpandemický návrat na cieľ je v EÚ27 rýchlejší než na Slovensku.
+      </p>
+    </article>
+
+    <article class="chart-panel chart-panel--full">
+      <h2>Miera nezamestnanosti (mesačne, sez. očistená)</h2>
+      <p class="sub">
+        Mesačná miera nezamestnanosti vek 15+, sezónne očistená — citlivejšia ako ročný priemer. Rastúci trend cez niekoľko mesiacov je skorý signál slabnúceho dopytu po práci. Zdroj:
+        <a href="https://ec.europa.eu/eurostat/databrowser/view/une_rt_m" target="_blank" rel="noopener">Eurostat une_rt_m</a> (TOTAL, T, PC_ACT, SA).
+      </p>
+      <SrcBadge :state="uneM.state === 'ok' ? 'eurostat' : uneM.state === 'err' ? 'err' : 'load'" :label="uneM.label" />
+      <ChartsEconLineChart
+        :times="(uneM.data ?? emptySeries()).times"
+        :sk="(uneM.data ?? emptySeries()).sk"
+        :eu="(uneM.data ?? emptySeries()).eu"
+        y-label="% pracovnej sily"
+        :y-percent="true"
+        x-label="Mesiac"
+        color1="#fb7185"
+        :rotate-x="true"
+        aria-label="Mesačná nezamestnanosť SR vs EÚ27"
+      />
+      <p class="note">
+        SK už roky drží štruktúrne nižšiu mieru než EÚ27, ale citlivosť na cyklus rovnaká. Sledujte 3-mesačný kĺzavý trend (Sahmovo pravidlo: nárast o 0,5 p.b. nad 12-mesačné minimum signalizuje začiatok recesie).
       </p>
     </article>
 
