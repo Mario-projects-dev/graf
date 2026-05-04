@@ -346,6 +346,71 @@ async function latestFromEurostat(
   return { v: null, year: times[times.length - 1] || "" };
 }
 
+// ===================== Women in fertile age (Y15–Y49) =====================
+// Composite custom indicator: total female population in reproductive age,
+// summed from individual single-year demo_pjan bands (Y15..Y49) and split into
+// three sub-bands so the chart shows compositional change over time.
+//
+// 15–24: late teens / early adulthood (peak studies, postponement)
+// 25–34: peak fertility window (largest contribution to TFR in modern SK)
+// 35–49: declining fertility, but still meaningful for first-birth postponement
+
+export interface FertileWomenSeries {
+  years: number[];
+  total: number[];
+  age15_24: number[];
+  age25_34: number[];
+  age35_49: number[];
+}
+
+const FERTILE_AGES: string[] = [];
+for (let a = 15; a <= 49; a++) FERTILE_AGES.push("Y" + a);
+
+export async function loadFertileWomen(): Promise<FertileWomenSeries> {
+  const stat = await fetchEurostat("demo_pjan", {
+    geo: "SK",
+    sex: "F",
+    age: FERTILE_AGES,
+  });
+  const times = jsonStatCodes(stat, "time")
+    .filter((t) => /^\d{4}$/.test(t))
+    .sort();
+  const years: number[] = [];
+  const total: number[] = [];
+  const a15_24: number[] = [];
+  const a25_34: number[] = [];
+  const a35_49: number[] = [];
+  for (const t of times) {
+    let sum = 0;
+    let b1 = 0;
+    let b2 = 0;
+    let b3 = 0;
+    let any = false;
+    for (let age = 15; age <= 49; age++) {
+      const v = jsonStatGet(stat, {
+        geo: "SK",
+        sex: "F",
+        age: "Y" + age,
+        time: t,
+      });
+      if (v == null) continue;
+      any = true;
+      sum += v;
+      if (age <= 24) b1 += v;
+      else if (age <= 34) b2 += v;
+      else b3 += v;
+    }
+    if (any) {
+      years.push(Number(t));
+      total.push(sum);
+      a15_24.push(b1);
+      a25_34.push(b2);
+      a35_49.push(b3);
+    }
+  }
+  return { years, total, age15_24: a15_24, age25_34: a25_34, age35_49: a35_49 };
+}
+
 export async function loadDemografiaKpis(): Promise<DemoKpis> {
   const [tfr, lifeExp, medianAge, naturalRate, ageMother1] = await Promise.all([
     latestFromEurostat("demo_find", { geo: "SK", indic_de: "TOTFERRT" }),

@@ -6,6 +6,7 @@ import {
   loadPyramid,
   loadDistricts,
   loadDemografiaKpis,
+  loadFertileWomen,
   type SourceTag,
   type YearlyPoint,
   type MonthlyPayload,
@@ -13,6 +14,7 @@ import {
   type DistrictPayload,
   type ChainResult,
   type DemoKpis,
+  type FertileWomenSeries,
 } from "~/composables/useDemografia";
 import {
   DISTRICT_GROW_ESTIMATE,
@@ -47,6 +49,7 @@ interface Bundle {
   pyramid: ChainResult<PyramidPayload> | null;
   districts: ChainResult<DistrictPayload> | null;
   kpis: DemoKpis | null;
+  fertile: FertileWomenSeries | null;
   fetchedAt: number;
 }
 const FALLBACK_DISTRICT: DistrictPayload = {
@@ -59,14 +62,15 @@ const FALLBACK_DISTRICT: DistrictPayload = {
 const { data, pending } = useStaticData<Bundle>(
   "demografia.overview",
   async () => {
-    const [yearly, monthly, pyramid, districts, kpis] = await Promise.all([
+    const [yearly, monthly, pyramid, districts, kpis, fertile] = await Promise.all([
       safeAsync(loadYearly, null as ChainResult<YearlyPoint[]> | null, "yearly"),
       safeAsync(loadMonthly, null as ChainResult<MonthlyPayload> | null, "monthly"),
       safeAsync(loadPyramid, null as ChainResult<PyramidPayload> | null, "pyramid"),
       safeAsync(loadDistricts, null as ChainResult<DistrictPayload> | null, "districts"),
       safeAsync(loadDemografiaKpis, null as DemoKpis | null, "kpis"),
+      safeAsync(loadFertileWomen, null as FertileWomenSeries | null, "fertile"),
     ]);
-    return { yearly, monthly, pyramid, districts, kpis, fetchedAt: Date.now() };
+    return { yearly, monthly, pyramid, districts, kpis, fertile, fetchedAt: Date.now() };
   },
   () => ({
     yearly: null,
@@ -74,6 +78,7 @@ const { data, pending } = useStaticData<Bundle>(
     pyramid: null,
     districts: null,
     kpis: null,
+    fertile: null,
     fetchedAt: 0,
   })
 );
@@ -110,6 +115,40 @@ const monthly = computed(() =>
 );
 const pyramid = computed(() => slot(data.value?.pyramid, "Populačná pyramída"));
 const districtsSlot = computed(() => slot(data.value?.districts, "Prírastok podľa okresov"));
+
+const fertile = computed(() => data.value?.fertile ?? null);
+const fertileLatest = computed(() => {
+  const f = fertile.value;
+  if (!f || !f.years.length) return null;
+  const i = f.years.length - 1;
+  return {
+    year: f.years[i],
+    total: f.total[i],
+    a25_34: f.age25_34[i],
+  };
+});
+const fertileTrend = computed(() => {
+  const f = fertile.value;
+  if (!f || f.years.length < 11) return undefined;
+  const i = f.years.length - 1;
+  const last = f.total[i];
+  const decadeAgo = f.total[i - 10];
+  if (last == null || decadeAgo == null) return undefined;
+  const delta = (last - decadeAgo) / decadeAgo;
+  if (delta > 0.02) return "up";
+  if (delta < -0.02) return "down";
+  return "flat";
+});
+const fertileTrendLabel = computed(() => {
+  const f = fertile.value;
+  if (!f || f.years.length < 11) return "";
+  const i = f.years.length - 1;
+  const last = f.total[i];
+  const decadeAgo = f.total[i - 10];
+  if (last == null || decadeAgo == null) return "";
+  const pct = ((last - decadeAgo) / decadeAgo) * 100;
+  return (pct >= 0 ? "+" : "") + pct.toFixed(1) + " % / 10 r.";
+});
 
 const yearLabels = computed(() =>
   yearly.value.data ? yearly.value.data.map((p) => p.year) : []
@@ -239,6 +278,56 @@ const overallStatus = computed(() => {
       accent="#a78bfa"
     />
   </section>
+
+  <article class="chart-panel chart-panel--full" style="margin-bottom: 1.25rem">
+    <h2>Ženy v plodnom veku (15–49 r.) — od roku 1960</h2>
+    <p class="sub">
+      <strong>Vlastný výpočet</strong> — agregovaný počet žien vo vekoch 15 až
+      49 rokov, rozdelený na tri sub-pásma (15–24, 25–34 vrchol plodnosti, 35–49)
+      so súhrnom navrchu. Tento ukazovateľ určuje <em>biologický strop</em>
+      potenciálnej pôrodnosti — aj pri konštantnom TFR celkový počet narodených
+      detí klesá, ak sa zužuje populácia žien v plodnom veku. Sčítané z
+      jednotlivých ročných pásiem
+      <a
+        href="https://ec.europa.eu/eurostat/databrowser/view/demo_pjan"
+        target="_blank"
+        rel="noopener"
+        >Eurostat demo_pjan</a
+      > (sex=F, age=Y15…Y49, geo=SK).
+    </p>
+    <SrcBadge
+      :state="fertile ? 'eurostat' : (pending ? 'load' : 'err')"
+      :label="fertile ? '✓ Sčítaných 35 jednotlivých vekových pásiem · Eurostat demo_pjan' : (pending ? '' : '⚠ Eurostat nedostupný')"
+    />
+    <ChartsFertileWomenChart
+      v-if="fertile"
+      :years="fertile.years"
+      :total="fertile.total"
+      :age15_24="fertile.age15_24"
+      :age25_34="fertile.age25_34"
+      :age35_49="fertile.age35_49"
+    />
+    <div v-else class="chart-box chart-box--tall chart-box--skeleton">
+      <span class="skeleton-label">⏳ Sčítavam ženy 15–49 r…</span>
+    </div>
+    <p class="note">
+      <span v-if="fertileLatest">
+        <strong>Najnovšie ({{ fertileLatest.year }}):</strong>
+        spolu {{ fertileLatest.total.toLocaleString("sk-SK") }} žien v plodnom
+        veku, z toho
+        {{ fertileLatest.a25_34.toLocaleString("sk-SK") }} v hlavnom pásme
+        25–34 r.
+        <span v-if="fertileTrendLabel">
+          (zmena za poslednú dekádu: {{ fertileTrendLabel }}).
+        </span>
+      </span>
+      Vrchol bol koncom 80. a začiatkom 90. rokov, keď do plodného veku
+      vstupovala silná baby-boom generácia 1970–1980. Od roku ~2010 počet
+      klesá štruktúrne — ide o echo poklesu pôrodnosti po roku 1990.
+      <em>Štruktúrny tlak na nižšie počty narodených detí pretrvá ešte
+      minimálne 15 rokov</em>, aj keby TFR vzrástol na replacement (2,1).
+    </p>
+  </article>
 
   <div class="charts-grid">
     <article class="chart-panel">
